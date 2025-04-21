@@ -2,7 +2,8 @@ When generating code for a Next.js project:
 
 - For data fetching, use Server Components and the native fetch API. Place the fetching logic in the same file as the component that uses the data.
 - Only use Client Components when client-side interactivity is required, such as for forms or components that need to access the browser's APIs.
-- Structure components using the container/presentational pattern: containers handle logic and state, presentational components handle UI.
+- Structure components using the container/presentational pattern: containers handle logic, state, data fetching, and error handling, while presentational components handle UI.
+- Apply a Container First approach: first define the overall Container Component tree (e.g., in page.tsx) and implement Containers with the necessary logic before adding Presentational and Client Components.
 - Build component hierarchies using composition, avoiding deep inheritance chains.
 - Use Suspense to wrap asynchronous components for better loading states and streaming.
 - For pages with both static and dynamic content, consider using Partial Pre-Rendering (PPR) if available.
