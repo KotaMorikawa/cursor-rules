@@ -1,0 +1,313 @@
+# 01_frontend.mdc: フロントエンド開発規約 (Next.js App Router)
+
+## 1. ディレクトリ構造 (`src` ディレクトリ以下)
+- **`src/app`:** App Router の規約に従い、ルーティング、レイアウト、ページコンポーネントを配置。
+  - **Route Groups `(groupName)`:** レイアウトやURLパスに影響を与えずにルートセグメントを整理するために使用する (例: `(auth)`, `(dashboard)`)。
+  - **Private Folders `_folderName`:** URLパスから除外し、コンポーネントやロジックファイルを整理するために使用する。
+    - **`_components`:** 特定のルートセグメントやページ内でのみ使用されるローカルコンポーネント。
+    - **`_containers`:** 複数のUIコンポーネントを組み合わせ、データフェッチや状態管理などのロジックを担うコンテナコンポーネント (Presentational and Container Components パターンにおける Container 相当)。
+    - **`_actions`:** Server Actions を配置する。ファイル名は `feature.actions.ts` のように責務が分かるようにする。
+    - **`_lib`:** 特定のルートセグメントや機能に関連するヘルパー関数、型定義、定数などを配置する。
+- **`src/components`:** プロジェクト全体で再利用可能なUIコンポーネント (Presentational Components)。
+  - **`ui/`:** shadcn/ui などのUIライブラリから提供される基本UI部品、またはそれに準ずる汎用的なカスタムUI部品。
+  - **`features/`:** 特定の機能ドメインに属するが、複数のページで再利用される可能性のあるUIコンポーネント群 (例: `features/user-profile/AvatarCard.tsx`)。
+- **`src/lib`:** プロジェクト全体で使用するクライアントサイドのヘルパー関数、型定義、APIクライアント、グローバルな状態管理ロジックなど。
+  - `auth/`: 認証関連のクライアントサイドロジックやNextAuth.js関連の設定。
+  - `utils/`: 汎用的なユーティリティ関数。
+  - `hooks/`: カスタムReactフック。
+  - `store/`: 状態管理ライブラリ (Zustand, Jotaiなど) の設定やストア定義。
+- **`public/`:** 静的ファイル (画像、フォント、faviconなど)。Next.jsのビルドプロセスでルートに配置される。
+
+## 2. コンポーネント設計
+- **Server Components と Client Components:**
+  - **デフォルトServer Components:**可能な限りServer Componentsを使用し、サーバーサイドレンダリングのメリットを活かす。
+  - **Client Components (`'use client'`):** インタラクティビティ (イベントハンドラ、state、effectフックなど) やブラウザAPIへのアクセスが必要な場合にのみ使用する。
+  - **境界の最適化:** Client Componentsはツリーのできるだけ末端 (Leaf) に配置し、Server Componentsの範囲を最大化する。Server ComponentsをClient ComponentsにPropsとして渡すことを活用する。
+- **Presentational and Container Components パターン (推奨):**
+  - **Presentational Components (`src/components`):** 見た目の描画に責任を持ち、Props経由でデータとコールバックを受け取る。状態を持たない (Stateless) ことを目指す。
+  - **Container Components (`src/app/**/_containers`):** データ取得、状態管理、ビジネスロジック処理を行い、Presentational Componentsにデータを渡す。Server ComponentsまたはClient Componentsとして実装可能。
+- **Props:**
+  - TypeScriptによる型定義を必須とする。InterfaceまたはType Aliasを使用。
+  - Props名は明確で理解しやすいものにする。boolean型のPropsは `is` や `has` で始める (例: `isVisible`, `hasError`)。
+  - Propsのバケツリレーを避けるため、必要に応じてReact Contextや状態管理ライブラリ、コンポジションを活用する。
+- **関心事の分離:** コンポーネントは単一責任の原則に従い、UI、ロジック、スタイルの関心事を適切に分離する。
+
+## 3. 状態管理
+- **ローカルステート:** Reactの `useState`, `useReducer` を適切に利用する。
+- **URLステート:** フィルタリング、ソート、ページネーションなど、URLで表現可能な状態はURLSearchParamsを活用する。Next.jsの `useRouter`, `useSearchParams` フックを利用。
+- **グローバルステート (Client Components間):**
+  - **React Context API:** 小規模で更新頻度の低いグローバルステートに適している。
+  - **Zustand, Jotai:** よりシンプルで宣言的な状態管理ライブラリ。ボイラープレートが少なく、React Concurrent Modeとの親和性が高い。
+  - **Redux (Toolkit):** 大規模で複雑な状態管理、強力な開発ツールが必要な場合に検討。
+- **サーバーキャッシュ・非同期状態管理:**
+  - **SWR (推奨) または React Query (TanStack Query):** データフェッチ、キャッシュ、同期、更新を効率的に行う。Server Components内でのデータフェッチとの使い分けを明確にする。
+
+## 4. キャッシュ戦略
+
+### 4.1 サーバー側キャッシュ
+
+#### 4.1.1 Data Cache（データキャッシュ）ベストプラクティス
+- **静的データ:** 長期間変更されないデータは永続キャッシュを活用。
+  ```typescript
+  // 推奨: 静的データの永続キャッシュ
+  async function getStaticCategories() {
+    const res = await fetch('https://api.example.com/categories')
+    return res.json()
+  }
+  ```
+- **準静的データ:** 定期的に更新されるデータは適切なrevalidate時間を設定。
+  ```typescript
+  // 推奨: 1時間ごとに再検証
+  async function getProductList() {
+    const res = await fetch('https://api.example.com/products', {
+      next: { revalidate: 3600 }
+    })
+    return res.json()
+  }
+  ```
+- **動的データ:** リアルタイム性が重要なデータはキャッシュを無効化。
+  ```typescript
+  // 推奨: 常に最新データを取得
+  async function getCurrentUserProfile() {
+    const res = await fetch('https://api.example.com/profile', {
+      cache: 'no-store'
+    })
+    return res.json()
+  }
+  ```
+
+#### 4.1.2 Cache Tagging（キャッシュタグ）戦略
+- **機能ドメイン単位でタグ付け:** 関連データを一括で無効化可能にする。
+  ```typescript
+  // データ取得時のタグ付け
+  async function getUsers() {
+    const res = await fetch('/api/users', {
+      next: { tags: ['users'] }
+    })
+    return res.json()
+  }
+  
+  async function getUserPosts(userId: string) {
+    const res = await fetch(`/api/users/${userId}/posts`, {
+      next: { tags: ['users', 'posts', `user-${userId}`] }
+    })
+    return res.json()
+  }
+  
+  // Server Action内での無効化
+  export async function updateUserAction(userId: string) {
+    await updateUser(userId)
+    revalidateTag('users')
+    revalidateTag(`user-${userId}`)
+  }
+  ```
+
+#### 4.1.3 Request Memoization活用指針
+- **同一リクエスト内での重複防止:** 自動的にメモ化されるため、意識的なコード分割を推奨。
+  ```typescript
+  // 推奨: 関数を細分化して自動メモ化を活用
+  async function getUserData() {
+    const user = await getUser()
+    const posts = await getUserPosts(user.id)
+    const followers = await getUserFollowers(user.id)
+    return { user, posts, followers }
+  }
+  ```
+
+### 4.2 クライアント側キャッシュ
+
+#### 4.2.1 SWR/React Query設定ベストプラクティス
+- **データ特性に応じた設定:** 更新頻度やリアルタイム性に応じて適切な設定を選択。
+  ```typescript
+  // 静的データ（カテゴリ、設定など）
+  const { data: categories } = useSWR('/api/categories', fetcher, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    revalidateIfStale: false,
+    dedupingInterval: 60000, // 1分間は重複リクエストを防ぐ
+  })
+  
+  // 準動的データ（投稿一覧など）
+  const { data: posts } = useSWR('/api/posts', fetcher, {
+    refreshInterval: 30000, // 30秒ごとに自動更新
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+  })
+  
+  // 動的データ（チャット、通知など）
+  const { data: notifications } = useSWR('/api/notifications', fetcher, {
+    refreshInterval: 5000, // 5秒ごとに自動更新
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    errorRetryCount: 3,
+  })
+  ```
+
+#### 4.2.2 Optimistic Updates（楽観的更新）
+- **UX向上のための楽観的更新:** 確実に成功する操作では積極的に活用。
+  ```typescript
+  const { data: todos, mutate } = useSWR('/api/todos', fetcher)
+  
+  const addTodo = async (newTodo: Omit<Todo, 'id'>) => {
+    // 楽観的更新でUIを即座に反映
+    const optimisticTodo = { ...newTodo, id: Date.now().toString() }
+    mutate([...todos, optimisticTodo], false)
+    
+    try {
+      const created = await createTodo(newTodo)
+      // 成功時は正しいデータで再検証
+      mutate([...todos.slice(0, -1), created])
+    } catch (error) {
+      // 失敗時は元の状態に戻す
+      mutate(todos)
+      throw error
+    }
+  }
+  ```
+
+#### 4.2.3 ローカルストレージ永続化戦略
+- **永続化対象の選定:** ユーザー設定やセッション情報など、再ログイン時も保持したいデータに限定。
+  ```typescript
+  // 推奨: 必要最小限のデータのみ永続化
+  export const useUserPreferencesStore = create<UserPreferences>()(
+    persist(
+      (set) => ({
+        theme: 'system',
+        language: 'ja',
+        notificationSettings: {
+          email: true,
+          push: false,
+        },
+        updateTheme: (theme) => set({ theme }),
+        updateLanguage: (language) => set({ language }),
+      }),
+      {
+        name: 'user-preferences',
+        storage: createJSONStorage(() => localStorage),
+        partialize: (state) => ({
+          theme: state.theme,
+          language: state.language,
+          notificationSettings: state.notificationSettings,
+        }),
+      }
+    )
+  )
+  ```
+
+### 4.3 キャッシュ無効化戦略
+
+#### 4.3.1 データ変更時の適切な無効化
+- **影響範囲を考慮した無効化:** 変更されたデータに関連するキャッシュを適切に無効化。
+  ```typescript
+  export async function updateProfileAction(formData: FormData) {
+    const updated = await updateUserProfile(formData)
+    
+    // サーバーキャッシュの無効化
+    revalidateTag('users')
+    revalidateTag(`user-${updated.id}`)
+    revalidatePath('/profile')
+    
+    return { success: true, user: updated }
+  }
+  
+  // クライアント側での対応
+  const handleProfileUpdate = async (data: ProfileData) => {
+    await updateProfileAction(data)
+    
+    // SWRキャッシュの無効化
+    mutate('/api/profile')
+    mutate('/api/users/me')
+    
+    // 関連する他のキャッシュも無効化
+    mutate(key => typeof key === 'string' && key.startsWith('/api/users/'))
+  }
+  ```
+
+#### 4.3.2 エラー時のキャッシュ処理
+- **エラー境界とキャッシュの整合性:** エラー発生時もキャッシュが不整合にならないよう配慮。
+  ```typescript
+  const updateTodo = async (id: string, updates: Partial<Todo>) => {
+    const originalTodos = todos
+    
+    try {
+      // 楽観的更新
+      mutate(
+        todos.map(todo => 
+          todo.id === id ? { ...todo, ...updates } : todo
+        ),
+        false
+      )
+      
+      const updated = await updateTodoAPI(id, updates)
+      // 成功時は正しいデータで再検証
+      mutate()
+      return updated
+    } catch (error) {
+      // エラー時は元の状態に戻す
+      mutate(originalTodos, false)
+      // エラーログ記録
+      console.error('Todo update failed:', error)
+      throw error
+    }
+  }
+  ```
+
+### 4.4 パフォーマンス監視とデバッグ
+
+#### 4.4.1 キャッシュ効率の監視
+- **開発時のキャッシュ状態確認:** Next.js DevToolsやSWR DevToolsを活用。
+  ```typescript
+  // 開発環境でのキャッシュ状態ログ出力
+  if (process.env.NODE_ENV === 'development') {
+    const { cache } = useSWRConfig()
+    console.log('SWR Cache:', cache)
+  }
+  ```
+
+#### 4.4.2 キャッシュヒット率の最適化
+- **適切なキー設計:** キャッシュキーは一意性と再利用性のバランスを考慮。
+  ```typescript
+  // 推奨: 階層的なキー設計
+  const getUserPosts = (userId: string, page: number, filter?: string) => {
+    const key = filter 
+      ? `/api/users/${userId}/posts?page=${page}&filter=${filter}`
+      : `/api/users/${userId}/posts?page=${page}`
+    
+    return useSWR(key, fetcher)
+  }
+  ```
+
+## 5. Server Actions
+- **利用シーン:** フォーム送信、データミューテーション (CUD操作) など、クライアントからのアクションをトリガーとするサーバーサイドロジック。API Routesの代替として積極的に活用する。
+- **配置:** `src/app/**/_actions/` ディレクトリに機能単位でファイルを分割して配置。
+- **プログレッシブエンハンスメント:** `<form action={serverAction}>` を基本とし、JavaScriptが無効な環境でも動作するように考慮する。`useFormState` や `useFormStatus` を活用し、ローディング状態やバリデーション結果をリッチに表示する。
+- **エラーハンドリングとレスポンス:** Server Action内で発生したエラーは適切に処理し、クライアントには処理結果 (成功、失敗、バリデーションエラーなど) を返す。Zodなどと連携してバリデーションを行う。
+- **セキュリティ:** 認証・認可チェックをActionの冒頭で必ず行う。`revalidatePath` や `revalidateTag` を適切に使用し、データ変更後のキャッシュを更新する。
+
+## 6. スタイリング
+- **基本:** Tailwind CSS を推奨 (プロジェクトで使用されている `components.json` や `postcss.config.mjs` から推測)。
+  - `tailwind.config.ts` でテーマ (色、フォント、スペーシングなど) をカスタマイズする。
+  - ユーティリティファーストで記述し、コンポーネントのスタイルは `@apply` を用いたクラス集約や、CSS Modulesとの併用で管理する。
+- **CSS Modules:** コンポーネントスコープのスタイルが必要な場合や、Tailwind CSSでは表現しにくい複雑なスタイルに利用。ファイル名は `[ComponentName].module.css`。
+- **グローバルスタイル:** `src/app/globals.css` に定義。リセットCSSや基本的なHTML要素のスタイル、Tailwindの`@layer` カスタマイズなどを記述。
+
+## 7. フォームハンドリング
+- **Server Actions との連携:** Server Actionsをフォームの `action` に指定する方式を基本とする。
+- **クライアントサイドバリデーション:** Server Actions利用時も、UX向上のためクライアントサイドでのバリデーションを併用する (例: React Hook Form + Zod)。`useFormState` でサーバーからのエラーメッセージを表示する。
+- **ライブラリ:**
+  - **React Hook Form (推奨):** パフォーマンスが高く、柔軟なバリデーションルール (Zod連携など) を設定可能。
+  - **Formik:** 多機能だが、比較的大規模なライブラリ。
+
+## 8. パフォーマンス最適化
+- **`next/image`:** 画像表示には必ず `<Image>` コンポーネントを使用し、自動画像最適化 (AVIF, WebP)、遅延読み込みを活用する。`width`, `height` (または `fill`) を適切に指定する。
+- **`next/link`:** アプリ内ナビゲーションには `<Link>` コンポーネントを使用し、クライアントサイドルーティングとプリフェッチを活用する。
+- **Dynamic Imports (`next/dynamic`):** Client Components や大規模なサードパーティライブラリを動的にインポートし、初期バンドルサイズを削減する。`ssr: false` オプションも適宜利用。
+- **`React.memo`, `useMemo`, `useCallback`:** Client Componentsにおいて、不要な再レンダリングを防ぐために適切に使用する。プロファイリングに基づき、効果的な箇所に限定して適用する。
+- **バンドル分析:** `@next/bundle-analyzer` を利用して定期的にバンドルサイズを監視し、最適化のボトルネックを特定する。
+
+## 9. アクセシビリティ (a11y)
+- **セマンティックHTML:** 意味的に正しいHTMLタグを使用する (例: `<nav>`, `<button>`, `<main>`)。
+- **WAI-ARIA:** 必要に応じてARIA属性 (例: `aria-label`, `aria-hidden`, `role`) を使用し、スクリーンリーダーなどの支援技術によるアクセシビリティを向上させる。
+- **キーボードナビゲーション:** すべてのインタラクティブ要素がキーボードのみで操作可能であることを保証する。フォーカスインジケータを適切に表示する。
+- **コントラスト:** WCAGの基準を満たす十分なテキストと背景のコントラスト比を確保する。
+- **リンター:** `eslint-plugin-jsx-a11y` などのリンターを導入し、開発中にアクセシビリティの問題を検知する。
