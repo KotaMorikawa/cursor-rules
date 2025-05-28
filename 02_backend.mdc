@@ -1,0 +1,100 @@
+# 02_backend.mdc: バックエンド開発規約 (Next.js API Routes / Server Actions)
+
+## 1. API Routes (`src/app/api/**/route.ts`)
+- **設計原則:** RESTful API の設計原則に従うことを推奨。
+  - **リソースベースのURL:** `src/app/api/users/[id]/route.ts` のようにリソースを明確に示す。
+  - **HTTPメソッド:** GET (取得), POST (作成), PUT (全体更新), PATCH (部分更新), DELETE (削除) を適切に使い分ける。
+  - **ステータスコード:** HTTP標準ステータスコードを正確に返す (例: 200 OK, 201 Created, 204 No Content, 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, 500 Internal Server Error)。
+- **リクエスト・レスポンス:**
+  - **データ形式:** JSONを基本とする。
+  - **バリデーション:** リクエストボディ、クエリパラメータ、URLパラメータのバリデーションを必須とする。Zodなどのスキーマバリデーションライブラリを使用し、`src/app/api/_lib` や共通の `src/lib/validators` などにスキーマを定義する。
+  - **レスポンス形式:** 成功時・エラー時ともに一貫したレスポンス形式を定義する。
+    ```json
+    // 成功時
+    {
+      "success": true,
+      "data": { /* 結果データ */ }
+    }
+    // エラー時
+    {
+      "success": false,
+      "error": {
+        "message": "エラーメッセージ",
+        "code": "ERROR_CODE" // 任意: エラーコード
+      }
+    }
+    ```
+- **エラーハンドリング:** グローバルなエラーハンドラやミドルウェアパターンを検討し、エラー処理を共通化する。詳細なエラー情報はサーバーログに記録し、クライアントには適切なエラー情報のみを返す。
+
+## 2. Server Actions (バックエンドロジックとして)
+- **責務:** 主にフォーム送信処理やデータミューテーション (作成・更新・削除) に関連するサーバーサイドロジック。API RoutesよりもUIと密接に連携する場合に適している。
+- **セキュリティ:**
+  - **認証・認可:** 各Actionの冒頭で、NextAuth.jsの `auth()` 関数 (または同等のセッション取得手段) を用いてユーザー認証状態を確認し、必要に応じてロールベースの認可チェックを行う。
+  - **CSRF対策:** Next.jsのServer ActionsはデフォルトでCSRF保護が組み込まれているため、特別な対応は基本的に不要。
+  - **入力バリデーション:** Zodなどを用いて厳格な入力バリデーションを行う。バリデーションスキーマはAPI Routesと共通化できる場合がある。
+- **エラーハンドリングと状態返却:**
+  - Actionは処理結果 (成功データまたはエラー情報) を返す。`useFormState` と連携し、クライアント側で状態をハンドリングできるようにする。
+  - 例: `{ success: boolean, data?: any, errors?: Record<string, string[]> }`
+- **冪等性:**可能な限り、ミューテーションを伴うActionは冪等性を考慮して設計する。
+
+## 3. 認証・認可
+- **ライブラリ:** NextAuth.js (Auth.js) を標準とする (プロジェクトの `[...all]/route.ts` や `src/lib/auth` から推測)。
+  - **設定ファイル:** `src/lib/auth/index.ts` (または `auth.config.ts`, `auth.ts` 等) にNextAuth.jsの設定を集約する。
+  - **プロバイダ:** Credentials Provider (メールアドレス・パスワード認証)、OAuth Provider (Google, GitHubなど) を適切に設定。
+  - **セッション管理:** NextAuth.jsのセッション管理戦略 (JWTまたはデータベースセッション) を理解し、適切に設定する。
+- **API/Action保護:**
+  - API RoutesやServer Actionsの処理開始前に、必ず認証状態を確認する。
+  - 必要に応じて、特定のロールや権限を持つユーザーのみがアクセスできるように認可ロジックを実装する。
+- **パスワード管理:** Credentials Providerを使用する場合、パスワードはbcryptなどの強力なハッシュ関数を用いてハッシュ化して保存する。
+
+## 4. データベース (Prisma)
+- **スキーマ定義:** `prisma/schema.prisma` でデータベースモデル、リレーション、制約を定義する。
+  - 定義変更後は `npx prisma format` を実行する。
+- **マイグレーション:**
+  - `npx prisma migrate dev`: 開発環境でのスキーマ変更とマイグレーションファイルの生成。
+  - `npx prisma migrate deploy`: 本番環境やステージング環境へのマイグレーション適用。
+  - マイグレーションファイルはバージョン管理に含める。
+- **Prisma Client:**
+  - **インスタンス化:** `src/lib/prisma.ts` (または `db.ts`) でPrisma Clientのインスタンスをシングルトンとして初期化し、グローバルに再利用する。
+    ```typescript
+    // src/lib/prisma.ts
+    import { PrismaClient } from '@prisma/client';
+
+    declare global {
+      var prisma: PrismaClient | undefined;
+    }
+
+    export const prisma = global.prisma || new PrismaClient();
+
+    if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
+    ```
+  - **型安全:** Prisma Clientが提供する型安全性を最大限に活用する。クエリ結果や引数の型推論を利用する。
+- **クエリ最適化:**
+  - **`select` と `include`:** 必要なデータのみを取得するように `select` や `include` を明示的に指定する。
+  - **N+1問題の回避:** リレーション先のデータを取得する際は、Prismaの `include` や、個別のクエリを効率的に発行する方法を検討する。
+  - **トランザクション:** 複数のデータベース操作をアトミックに行う必要がある場合は、`prisma.$transaction()` を使用する。
+- **データバリデーション:** データベースに保存する前（Prisma Clientを呼び出す前）に、アプリケーションレイヤー (API Routes, Server Actions) でZodなどを用いてバリデーションを行う。
+
+## 5. 環境変数管理
+- **ファイル:** `.env` (Git管理外、ローカル開発用)、`.env.example` (Git管理対象、環境変数テンプレート)、`.env.production` (ビルド時用) などを活用。
+- **Next.jsの規約:**
+  - `NEXT_PUBLIC_` プレフィックス: ブラウザで利用可能な環境変数。
+  - プレフィックスなし: サーバーサイドでのみ利用可能な環境変数。
+- **型安全なアクセス (推奨):** Zodなどを用いて環境変数のスキーマを定義し、起動時にバリデーションを行う。`@t3-oss/env-nextjs` などのライブラリ利用も検討。
+- **センシティブ情報:** APIキー、データベース認証情報などのセンシティブな情報は、VercelやAWSなどのホスティングプラットフォームの環境変数管理機能を利用して安全に設定する。
+
+## 6. セキュリティ
+- **入力バリデーション:** 全ての外部入力 (HTTPリクエストボディ、クエリパラメータ、URLパスパラメータ、Server Actionの引数) に対して、Zod等を用いた厳格なバリデーションとサニタイズを行う。
+- **SQLインジェクション対策:** PrismaのようなORMを使用することで、基本的なSQLインジェクションは防止される。生のSQLクエリ (`$queryRaw`, `$executeRaw`) を使用する場合は特に慎重にパラメータを扱う。
+- **XSS (Cross-Site Scripting) 対策:** React/Next.jsはデフォルトで出力値をエスケープするためXSSリスクは低いが、`dangerouslySetInnerHTML` の使用は極力避ける。ユーザー生成コンテンツを扱う場合はサニタイズ処理を検討する。
+- **依存関係のセキュリティ:** `npm audit` や `yarn audit` を定期的に実行し、依存パッケージの脆弱性をチェック・更新する。DependabotやSnykなどのツールを導入する。
+- **レートリミット:** ブルートフォース攻撃やDoS攻撃を防ぐため、認証エンドポイントや負荷の高いAPIにはレートリミットを導入する (例: `upstash/ratelimit`)。
+- **ヘッダーセキュリティ:** `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options` などのセキュリティ関連HTTPヘッダーを適切に設定する (`next.config.js` の `headers` 機能など)。
+
+## 7. ロギング
+- **基本方針:** リクエスト情報 (メソッド, URL, IPアドレス等)、エラー情報 (スタックトレース含む)、重要なビジネスロジックの実行ログなどを記録する。
+- **ログレベル:** DEBUG, INFO, WARN, ERROR などの標準的なログレベルを使い分ける。
+- **ツール:**
+  - **開発環境:** `console.log` や `console.error` で十分な場合もある。
+  - **本番環境:** Pino, Winston などの構造化ロギングライブラリの導入を検討。または、Vercel Logging, Datadog, Sentry などの外部ロギングサービスと連携する。
+- **機密情報:** ログにパスワードや個人情報などの機密情報が含まれないように注意する。
